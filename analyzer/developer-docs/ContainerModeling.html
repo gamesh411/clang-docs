@@ -1,0 +1,433 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3.6. Container and Iterator Modeling &#8212; Clang 12 documentation</title>
+    <link rel="stylesheet" href="../../static/haiku.css" type="text/css" />
+    <link rel="stylesheet" href="../../static/pygments.css" type="text/css" />
+    <script id="documentation_options" data-url_root="../../" src="../../static/documentation_options.js"></script>
+    <script src="../../static/jquery.js"></script>
+    <script src="../../static/underscore.js"></script>
+    <script src="../../static/doctools.js"></script>
+    <script src="../../static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Thread Safety Analysis" href="../../ThreadSafetyAnalysis.html" />
+    <link rel="prev" title="3.5. Region Store" href="RegionStore.html" /> 
+  </head><body>
+      <div class="header" role="banner"><h1 class="heading"><a href="../../index.html">
+          <span>Clang 12 documentation</span></a></h1>
+        <h2 class="heading"><span>3.6. Container and Iterator Modeling</span></h2>
+      </div>
+      <div class="topnav" role="navigation" aria-label="top navigation">
+      
+        <p>
+        «&#160;&#160;<a href="RegionStore.html"><span class="section-number">3.5. </span>Region Store</a>
+        &#160;&#160;::&#160;&#160;
+        <a class="uplink" href="../../index.html">Contents</a>
+        &#160;&#160;::&#160;&#160;
+        <a href="../../ThreadSafetyAnalysis.html">Thread Safety Analysis</a>&#160;&#160;»
+        </p>
+
+      </div>
+      <div class="content" role="main">
+        
+        
+  <div class="section" id="container-and-iterator-modeling">
+<h1><span class="section-number">3.6. </span>Container and Iterator Modeling<a class="headerlink" href="#container-and-iterator-modeling" title="Permalink to this headline">¶</a></h1>
+<p>The goal of checker <code class="docutils literal notranslate"><span class="pre">alpha.cplusplus.ContainerModeling</span></code> is to provide a
+symbolic abstraction for containers to the Clang Static Analyzer. There are
+various concepts regarding containers that help formulate static analysis
+problems more concisely. The size of the container, whether is empty or not are
+the most trivial motivating examples. Standard containers can be iterated, and
+this idiom is well-adopted in case of non-standard container implementations as
+well, because it can be used to provide a compatible interface to algorithms.
+Therefore iterator modeling is closely related to containers. Iterators extend
+the range of useful properties when it comes to finding bugs, for example, which
+container an iterator belongs to, what position inside the container it is in,
+and whether it is a valid or invalid state (see rules for <a class="reference external" href="https://en.cppreference.com/w/cpp/container#Iterator_invalidation">iterator invalidation</a>).
+Iterator modeling is implemented in checker <code class="docutils literal notranslate"><span class="pre">alpha.cplusplus.IteratorModeling</span></code>.</p>
+<p>There are also various checkers which make use if the information provided by
+the modeling checkers mentioned:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p><a class="reference internal" href="../checkers.html#alpha-cplusplus-invalidatediterator"><span class="std std-ref">alpha.cplusplus.InvalidatedIterator (C++)</span></a></p></li>
+<li><p><a class="reference internal" href="../checkers.html#alpha-cplusplus-iteratorrange"><span class="std std-ref">alpha.cplusplus.IteratorRange (C++)</span></a></p></li>
+<li><p><a class="reference internal" href="../checkers.html#alpha-cplusplus-mismatchediterator"><span class="std std-ref">alpha.cplusplus.MismatchedIterator (C++)</span></a></p></li>
+</ul>
+</div></blockquote>
+<div class="section" id="definition-of-a-container">
+<h2><span class="section-number">3.6.1. </span>Definition of a container<a class="headerlink" href="#definition-of-a-container" title="Permalink to this headline">¶</a></h2>
+<p>According to ContainerModeling, a value <code class="docutils literal notranslate"><span class="pre">c</span></code> with type <code class="docutils literal notranslate"><span class="pre">C</span></code> is considered a
+container if either of the following holds:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>The expression <code class="docutils literal notranslate"><span class="pre">c.begin()</span></code> and <code class="docutils literal notranslate"><span class="pre">c.end()</span></code> are both valid expressions, and
+return an <a class="reference external" href="https://en.cppreference.com/w/cpp/iterator#Iterator_categories">iterator</a>.
+This should be detected by type C having member functions <code class="docutils literal notranslate"><span class="pre">T</span> <span class="pre">C::begin()</span></code>
+and <code class="docutils literal notranslate"><span class="pre">T</span> <span class="pre">C::end()</span></code>, where T is an <a class="reference external" href="https://en.cppreference.com/w/cpp/iterator#Iterator_categories">iterator</a>.</p></li>
+<li><p>The expression <code class="docutils literal notranslate"><span class="pre">begin(c)</span></code> and <code class="docutils literal notranslate"><span class="pre">end(c)</span></code> are both valid expressions in a
+given scope, and return an <a class="reference external" href="https://en.cppreference.com/w/cpp/iterator#Iterator_categories">iterator</a>.
+This should be detected by checking the existence functions with the
+corresponding names, and can either be user-defined free functions or
+template specialization of the standard-defined <code class="docutils literal notranslate"><span class="pre">template&lt;typename</span> <span class="pre">T&gt;</span>
+<span class="pre">constexpr</span> <span class="pre">auto</span> <span class="pre">std::begin(T&amp;</span> <span class="pre">t)</span> <span class="pre">-&gt;</span> <span class="pre">decltype(t.begin())</span></code> and
+<code class="docutils literal notranslate"><span class="pre">template&lt;typename</span> <span class="pre">T&gt;</span> <span class="pre">constexpr</span> <span class="pre">auto</span> <span class="pre">std::end(T&amp;</span> <span class="pre">t)</span> <span class="pre">-&gt;</span>
+<span class="pre">decltype(t.end())</span></code> function templates (see <a class="reference external" href="https://en.cppreference.com/w/cpp/iterator/begin">std::begin</a> and <a class="reference external" href="https://en.cppreference.com/w/cpp/iterator/end">std::end</a>).</p></li>
+</ul>
+</div></blockquote>
+<p>Example containers in STL (with different <a class="reference external" href="https://en.cppreference.com/w/cpp/container#Iterator_invalidation">invalidation properties</a>)</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>std::array</p></li>
+<li><p>std::vector</p></li>
+<li><p>std::deque</p></li>
+<li><p>std::list</p></li>
+<li><p>std::forward_list</p></li>
+</ul>
+</div></blockquote>
+<p>Example of a custom container with member functions.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">C</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">;</span>
+<span class="k">public</span><span class="o">:</span>
+  <span class="k">using</span> <span class="n">iterator</span> <span class="o">=</span> <span class="k">typename</span> <span class="nc">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;::</span><span class="n">iterator</span><span class="p">;</span>
+
+  <span class="n">iterator</span> <span class="nf">begin</span><span class="p">()</span> <span class="p">{</span> <span class="k">return</span> <span class="n">v</span><span class="p">.</span><span class="n">begin</span><span class="p">();</span> <span class="p">}</span>
+  <span class="n">iterator</span> <span class="nf">end</span><span class="p">()</span> <span class="p">{</span> <span class="k">return</span> <span class="n">v</span><span class="p">.</span><span class="n">end</span><span class="p">();</span> <span class="p">}</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>Example of a custom container with free functions.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">C</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">;</span>
+<span class="k">public</span><span class="o">:</span>
+  <span class="k">using</span> <span class="n">iterator</span> <span class="o">=</span> <span class="k">typename</span> <span class="nc">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;::</span><span class="n">iterator</span><span class="p">;</span>
+
+  <span class="k">friend</span> <span class="n">iterator</span> <span class="n">begin</span><span class="p">(</span><span class="n">C</span><span class="o">&amp;</span><span class="p">);</span>
+  <span class="k">friend</span> <span class="n">iterator</span> <span class="n">end</span><span class="p">(</span><span class="n">C</span><span class="o">&amp;</span><span class="p">);</span>
+<span class="p">};</span>
+
+<span class="n">C</span><span class="o">::</span><span class="n">iterator</span> <span class="n">begin</span><span class="p">(</span><span class="n">C</span><span class="o">&amp;</span> <span class="n">c</span><span class="p">)</span> <span class="p">{</span> <span class="k">return</span> <span class="n">c</span><span class="p">.</span><span class="n">v</span><span class="p">.</span><span class="n">begin</span><span class="p">();</span> <span class="p">}</span>
+<span class="n">C</span><span class="o">::</span><span class="n">iterator</span> <span class="n">end</span><span class="p">(</span><span class="n">C</span><span class="o">&amp;</span> <span class="n">c</span><span class="p">)</span> <span class="p">{</span> <span class="k">return</span> <span class="n">c</span><span class="p">.</span><span class="n">v</span><span class="p">.</span><span class="n">end</span><span class="p">();</span> <span class="p">}</span>
+</pre></div>
+</div>
+<p>Example of a custom container with std template specialization.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">C</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">;</span>
+  <span class="k">auto</span> <span class="nf">begin</span><span class="p">()</span> <span class="p">{</span> <span class="k">return</span> <span class="n">v</span><span class="p">.</span><span class="n">begin</span><span class="p">();</span> <span class="p">}</span>
+  <span class="k">auto</span> <span class="nf">end</span><span class="p">()</span> <span class="p">{</span> <span class="k">return</span> <span class="n">v</span><span class="p">.</span><span class="n">end</span><span class="p">();</span> <span class="p">}</span>
+<span class="k">public</span><span class="o">:</span>
+  <span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span>
+  <span class="k">friend</span> <span class="k">constexpr</span> <span class="k">auto</span> <span class="n">std</span><span class="o">::</span><span class="n">begin</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span> <span class="n">t</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">decltype</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">begin</span><span class="p">());</span>
+  <span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span>
+  <span class="k">friend</span> <span class="k">constexpr</span> <span class="k">auto</span> <span class="n">std</span><span class="o">::</span><span class="n">end</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span> <span class="n">t</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="k">decltype</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">end</span><span class="p">());</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="modeling-of-a-container">
+<h2><span class="section-number">3.6.2. </span>Modeling of a container<a class="headerlink" href="#modeling-of-a-container" title="Permalink to this headline">¶</a></h2>
+<p>A container is modeled if it has an associated <code class="docutils literal notranslate"><span class="pre">MemRegion</span></code>, and this <code class="docutils literal notranslate"><span class="pre">MemRegion</span></code>,
+or rather the <code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">MemRegion*</span></code> (and pointers to its subclasses), that is accessible
+by the <code class="docutils literal notranslate"><span class="pre">MemRegionManager</span></code> is what uniquely identifies a container. Temporary
+containers do not necessarily have a <code class="docutils literal notranslate"><span class="pre">MemRegion</span></code>, these are not modeled.</p>
+<p>A container is tracked from the <code class="docutils literal notranslate"><span class="pre">ProgramPoint</span></code>, where either <code class="docutils literal notranslate"><span class="pre">begin</span></code> or <code class="docutils literal notranslate"><span class="pre">end</span></code>
+member function (or free function) is called. Abstract modeling uses <code class="docutils literal notranslate"><span class="pre">SymbolRef</span></code>-s for the
+begin and end positions of a container. Any relations between the two positions are tracked
+in form of assumptions (inside <code class="docutils literal notranslate"><span class="pre">ConstraintManager</span></code>).
+For specifying positions inside the container we use one of the following expressions</p>
+<blockquote>
+<div><ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">&lt;begin-symbol&gt;</span> <span class="pre">+</span> <span class="pre">&lt;concrete-value&gt;</span></code> for specifying a position relative to the beginning of the container.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&lt;end-symbol&gt;</span> <span class="pre">-</span> <span class="pre">&lt;concrete-value&gt;</span></code> for specifying a position relative to the end of the container.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&lt;conjured-symbol&gt;</span></code> for unknown positions inside the container.</p></li>
+</ul>
+</div></blockquote>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code class="docutils literal notranslate"><span class="pre">using</span> <span class="pre">clang::ento::SymbolRef</span> <span class="pre">=</span> <span class="pre">typedef</span> <span class="pre">const</span> <span class="pre">SymExpr</span> <span class="pre">*</span></code></p>
+</div>
+<p>Containers are modeled in the GDM by their region (MemRegion*) as their associated key,
+this region is immutable, it cannot change during the lifetime of the modeled object.
+The begin and end symbols are conjured and are completely unrelated to the region of
+the container. For each region we store the only the begin and end symbols, other properties
+are to be computed from these, and their relationships stored in the ContstraintManager.</p>
+<p>The symbolic-value categories (<code class="docutils literal notranslate"><span class="pre">SVal</span></code> subclasses) encountered during container modeling
+are <code class="docutils literal notranslate"><span class="pre">Loc</span></code> (and subclasses, most prominently <code class="docutils literal notranslate"><span class="pre">ConcreteInt</span></code> and <code class="docutils literal notranslate"><span class="pre">MemRegionVal</span></code>), as
+temporary containers are not modeled.</p>
+<p>Apart from identifying the container with a <code class="docutils literal notranslate"><span class="pre">MemRegion</span></code>, in order to interact with
+iterator modeling, the symbolic begin and end positions of the container are also tracked.
+The size (and as a special case, whether the container is empty or not) are properties that
+should also be tracked.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Currently, the implementation does not handle size and emptiness tracking, but patches
+can be found for them on Phabricator: <a class="reference external" href="https://reviews.llvm.org/D76604">size</a> and
+<a class="reference external" href="https://reviews.llvm.org/D76590">empty</a>.</p>
+</div>
+<div class="section" id="implementation-limitations">
+<h3><span class="section-number">3.6.2.1. </span>Implementation limitations<a class="headerlink" href="#implementation-limitations" title="Permalink to this headline">¶</a></h3>
+<p>There are some limitations which must be circumvented in order to effectively implement
+container modeling. The problem of RValue/LValue (more precisely prvalue, xvalue, and
+lvalue see <a class="reference external" href="https://en.cppreference.com/w/cpp/language/value_category">value categories</a>)
+modeling is not prominent is case containers alone, as no temporary objects are considered.
+However, this is an issue to be solved when it comes to modeling iterators.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Containers as RValues are currently not relevant, but size modeling could use them, as the
+modeling of copy constructors are needed.
+No constructors of containers are modeled, there is a WIP
+<a class="reference external" href="https://reviews.llvm.org/D87388">patch</a> for default constructor.</p>
+</div>
+<p>There is a limitation in the size of Symbols handled by <code class="docutils literal notranslate"><span class="pre">the</span> <span class="pre">ConstraintManager</span></code>, namely that
+every offset is assumed to be at most <code class="docutils literal notranslate"><span class="pre">typesize/4</span></code> in size, otherwise the <code class="docutils literal notranslate"><span class="pre">ConstraintManager</span></code>
+could not reorder expressions containing the the symbol. As an orthogonal issue symbol-symbol
+comparisons still cannot be handled properly if the <code class="docutils literal notranslate"><span class="pre">ContstraintManager</span></code> would also be able
+answer questions like: is symbol A less than symbol B (instead of just reporting the possible
+range of the values a symbol can have).</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>There is a WIP extension: if range of 2 symbols is disjunct and the max of first is less than
+the min of the second, report less relation. <a class="reference external" href="https://reviews.llvm.org/D77792">patch</a>
+This patch would be needed to compare the sizes of containers.
+If the containers don’t overlap in memory, then this would provide a way to determine the size
+differences. E.g.: If we could store <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">=</span> <span class="pre">b</span> <span class="pre">+</span> <span class="pre">5</span></code> even if the ranges of a and b is unknown,
+reordering of this would produce: <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">-</span> <span class="pre">b</span> <span class="pre">=</span> <span class="pre">5</span></code> and this can have a range attached in the
+abstract state.</p>
+</div>
+</div>
+</div>
+</div>
+<div class="section" id="iterator-modeling">
+<h1><span class="section-number">3.7. </span>Iterator Modeling<a class="headerlink" href="#iterator-modeling" title="Permalink to this headline">¶</a></h1>
+<div class="section" id="definition-of-an-iterator">
+<h2><span class="section-number">3.7.1. </span>Definition of an iterator<a class="headerlink" href="#definition-of-an-iterator" title="Permalink to this headline">¶</a></h2>
+<p>A value with type T is possibly considered an iterator:
+If T is</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>copy-constructible</p></li>
+<li><p>copy-assignable</p></li>
+<li><p>destructible</p></li>
+<li><p>can be incremented (both post and prefix unary plus-plus operator are defined)</p></li>
+</ul>
+</div></blockquote>
+<p>AND
+T meets the requirements of either input or output iterator</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>in case of input:</p>
+<ul>
+<li><p>dereference operator with an rvalue return type is defined (both <code class="docutils literal notranslate"><span class="pre">operator*</span></code> and <code class="docutils literal notranslate"><span class="pre">operator-&gt;</span></code>)</p></li>
+<li><p>equality/inequality comparable (both bool <code class="docutils literal notranslate"><span class="pre">operator==</span></code> and bool <code class="docutils literal notranslate"><span class="pre">operator!=</span></code> are defined)</p></li>
+</ul>
+</li>
+<li><p>in case of output:</p>
+<ul>
+<li><p>dereference operator with an lvalue return type is defined (both <code class="docutils literal notranslate"><span class="pre">operator*</span></code> and <code class="docutils literal notranslate"><span class="pre">operator-&gt;</span></code>)</p></li>
+<li><p>(note in this case no equality/inequality is required)</p></li>
+</ul>
+</li>
+</ul>
+</div></blockquote>
+<p>The iterator modeling takes these into consideration only during the detection of iterators, and the
+iterator-category is not stored explicitly.</p>
+</div>
+<div class="section" id="modeling-of-an-iterator">
+<h2><span class="section-number">3.7.2. </span>Modeling of an iterator<a class="headerlink" href="#modeling-of-an-iterator" title="Permalink to this headline">¶</a></h2>
+<p>The tracking of an iterator begins if a value is detected with the preceding properties <em>and</em> its name
+has ‘iterator’/’iter’/’it’ postfix. In special cases pointers are also treated as iterators, namely,
+if they are results of <code class="docutils literal notranslate"><span class="pre">begin</span></code> or <code class="docutils literal notranslate"><span class="pre">end</span></code> member functions or free functions.</p>
+<dl class="simple">
+<dt>The following heuristics are also in place to limit the tracking of many unrelated iterators:</dt><dd><ul class="simple">
+<li><p>only track an iterator if its generating expression has a tracked container (and this will be the parent container of the returned iterator)</p></li>
+<li><p>only track an iterator if its generating expression is a function call which has at least 1 argument, that is an already tracked iterator (and the first iterator parameter’s container will be the parent container of the returned iterator)</p></li>
+</ul>
+</dd>
+</dl>
+<p>If either of these heuristics matches the tracking of iterator should be skipped.</p>
+<dl class="simple">
+<dt>Iterators are modeled in the GDM with 2 kinds of keys:</dt><dd><ul class="simple">
+<li><p>Region (<code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">MemRegion*</span></code>)</p></li>
+<li><p>Symbol (<code class="docutils literal notranslate"><span class="pre">SymbolRef</span></code>)</p></li>
+</ul>
+</dd>
+</dl>
+<p>There are therefore 2 maps which model iterators, one is called the RegionMap, the other is the SymbolMap.</p>
+<dl class="simple">
+<dt>For each iterator the following information is stored:</dt><dd><ul class="simple">
+<li><p>a flag signifying the validity of the iterator</p></li>
+<li><p>a reference to the container it belongs to (parent container)</p></li>
+<li><p>the offset of this iterator inside the (parent container)</p></li>
+</ul>
+</dd>
+</dl>
+<p>The iterator offset is abstract, no <code class="docutils literal notranslate"><span class="pre">MemRegionVal</span></code> is associated with iterator offsets.</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>a single conjured symbol (SymbolVal)</p></li>
+<li><p>a conjured symbol (SymbolVal) + a number (<code class="docutils literal notranslate"><span class="pre">ConcreteInt</span></code>) (This for is useful for reordering)</p></li>
+</ul>
+</div></blockquote>
+<p>Functions like find (when alpha.cplusplus.STLAlgorithmModeling is enabled) handle cases where an
+element is found, and a case where it is not</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>found case: <code class="docutils literal notranslate"><span class="pre">return</span> <span class="pre">it</span> <span class="pre">&gt;=</span> <span class="pre">1.parameter</span></code> AND <code class="docutils literal notranslate"><span class="pre">it</span> <span class="pre">&lt;</span> <span class="pre">2.parameter</span></code> constraints are applied</p></li>
+<li><p>not-found case: <code class="docutils literal notranslate"><span class="pre">it</span> <span class="pre">==</span> <span class="pre">2.parameter</span></code> constraint is applied</p></li>
+</ul>
+</div></blockquote>
+<p>Assert should be used if the element is KNOWN to be in the container (invariant property of the usage)</p>
+<p>There are currently 2 main categories of iterators, one is implemented with pointers, the other is via class
+instances. The goal is to handle iterators in a uniform fashion for the 2 iterator implementations.</p>
+<p>Example of a pointer iterator implementation (conceptionally no difference between inline and non-inline modes)</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span> <span class="nc">Cont</span> <span class="p">{</span>
+  <span class="k">using</span> <span class="n">iterator</span> <span class="o">=</span> <span class="kt">int</span><span class="o">*</span><span class="p">;</span>
+  <span class="kt">int</span> <span class="n">v</span><span class="p">[</span><span class="mi">8</span><span class="p">];</span>
+  <span class="n">iterator</span> <span class="n">end_pos</span><span class="p">;</span>
+
+  <span class="n">iterator</span> <span class="nf">begin</span><span class="p">()</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="n">v</span><span class="p">;</span>
+  <span class="p">}</span>
+
+  <span class="n">iterator</span> <span class="nf">end</span><span class="p">()</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="n">end_pos</span><span class="p">;</span>
+  <span class="p">}</span>
+
+  <span class="c1">// methods handling container operations</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>A detailed example of modeling a container and its iterators.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span> <span class="nf">f</span><span class="p">()</span> <span class="p">{</span>
+  <span class="n">Cont</span> <span class="n">c</span><span class="p">;</span>              <span class="c1">// no modeling should be done here</span>
+
+  <span class="kt">int</span><span class="o">*</span> <span class="n">it</span> <span class="o">=</span> <span class="n">c</span><span class="p">.</span><span class="n">begin</span><span class="p">();</span> <span class="c1">// container-modeling begins by tracking c as a container of type Cont</span>
+                       <span class="c1">// begin() member function call triggers the modeling</span>
+                       <span class="c1">// iterator-modeling also begins by tracking the value of c.begin()</span>
+                       <span class="c1">// as an iterator</span>
+                       <span class="c1">// we check if the value has the necessary iterator-properties</span>
+                       <span class="c1">// ExprEngine handles the binding of RValue c.begin() to the value of it.</span>
+
+  <span class="o">++</span><span class="n">it</span><span class="p">;</span>                <span class="c1">// it is a tracked iterator, operator++ is a relevant operation</span>
+                       <span class="c1">// ExprEngine creates new ElementRegion for the incremented iterator,</span>
+                       <span class="c1">// and binds this (RValue) SVal to variable it (LValue)</span>
+
+  <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="p">(</span><span class="n">it</span> <span class="o">==</span> <span class="n">c</span><span class="p">.</span><span class="n">end</span><span class="p">()))</span> <span class="p">{</span> <span class="c1">// c.end() triggers container-modeling again, producing an iterator</span>
+                          <span class="c1">// position, noting it in the modeling structure for c as end position</span>
+                          <span class="c1">// comparion operator== triggers a state-split, branch a assuming that</span>
+                          <span class="c1">// it position is equal to the newly created end position, branch b</span>
+                          <span class="c1">// has the opposite assumption</span>
+    <span class="n">use</span><span class="p">(</span><span class="o">*</span><span class="n">it</span><span class="p">);</span>             <span class="c1">// Iterator modeling does not do anything with this dereference</span>
+                          <span class="c1">// operator-call, but checkers can use the information aggregated by</span>
+                          <span class="c1">// modeling to ensure that the iterator is valid in this case (because</span>
+                          <span class="c1">// of the if guarding it)</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<div class="section" id="id4">
+<h3><span class="section-number">3.7.2.1. </span>Implementation limitations<a class="headerlink" href="#id4" title="Permalink to this headline">¶</a></h3>
+<p>Contrary to the container-modeling, not only lvalue iterators are tracked. This is the reason
+why 2 different keys are used in the GDM for iterators. An lvalue iterator has a Region
+(<code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">MemRegion*</span></code>) and it is used if available. If no Region is found for an iterator value
+then a Symbol is used (<code class="docutils literal notranslate"><span class="pre">SymbolRef</span></code>).</p>
+<p>In the case of pointer iterators (where std::is_pointer&lt;T&gt;::value is true for the type T of the iterator),
+the modeling of the symbolic value is simpler. The lifetime of such values is simple to model,
+there is no need for constructors, destructors and copy-elision rules to be taken into consideration.</p>
+<p>Example of a pointer iterator.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="kt">int</span> <span class="o">*</span> <span class="n">it</span> <span class="o">=</span> <span class="n">cont</span><span class="p">.</span><span class="n">begin</span><span class="p">();</span>
+<span class="kt">int</span> <span class="o">*</span> <span class="n">it</span> <span class="o">=</span> <span class="n">it</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+<span class="c1">// SVal of it + 1 subexpression: NonLoc kind (designates an RValue)</span>
+</pre></div>
+</div>
+<p>The operators of such iterators are built-in operators.</p>
+<p>Iterators implemented as pointer live generally in the SymbolMap (the map containing <code class="docutils literal notranslate"><span class="pre">SymbolRef</span></code>-s as
+opposed to the map containing the <code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">MemRegion*</span></code>-s), and can not be only represented with LValues (and
+consequently inside the RegionMap), as tracking the value of symbolic offset of an iterator must handle
+expressions where there may only be temporaries with no LValues associated with them.</p>
+<p>We cannot consistently track only LValues (<code class="docutils literal notranslate"><span class="pre">MemRegionVal</span></code>-s) or only <code class="docutils literal notranslate"><span class="pre">RValues``(``SymbolVal</span></code> or <code class="docutils literal notranslate"><span class="pre">LazyCompoundVal</span></code>),
+because pointer iterators have only Rvalues that always identifies them (across multiple subexpressions),
+class instance variables only have Lvalues for this role. SymbolMap always has iterator values that are RValues.
+RegionMap can have iterator values which are LVals but also values which are RValues.</p>
+<p>In case of class instance implemented iterators, the operations are <code class="docutils literal notranslate"><span class="pre">CXXOperatorCallExpr</span></code>-s (not built-in
+operators). Also sometimes RValues of such instances are modeled as <code class="docutils literal notranslate"><span class="pre">LazyCompoundVal</span></code> <code class="docutils literal notranslate"><span class="pre">SVal</span></code>-s, but can
+also appear as <code class="docutils literal notranslate"><span class="pre">MemRegionVal</span></code> or <code class="docutils literal notranslate"><span class="pre">SymbolVal</span></code> (if <code class="docutils literal notranslate"><span class="pre">std-container-inlining</span></code> analyzer option is off).</p>
+<p>The modeling of special container-related member functions can be found in <code class="docutils literal notranslate"><span class="pre">Iterator.cpp</span></code>, and
+algorithm modeling in <code class="docutils literal notranslate"><span class="pre">STLAlgorithmModeling.cpp</span></code>.</p>
+<p>The semantic difference between the 2 iterator implementation with respect to their <code class="docutils literal notranslate"><span class="pre">SVals</span></code> is
+that accessing a pointers <code class="docutils literal notranslate"><span class="pre">SVal</span></code> always return reference to a Region (no way to be a symbol, SymRegion),
+but in case if a class instance iterator can be a symbol (SymExpr).</p>
+<p>Example of a class instance iterator.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">cont_it</span> <span class="p">{...};</span>
+<span class="n">cont_it</span> <span class="n">it</span> <span class="o">=</span> <span class="n">cont</span><span class="p">.</span><span class="n">begin</span><span class="p">();</span>
+<span class="n">cont_it</span> <span class="n">it</span> <span class="o">=</span> <span class="n">it</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+<span class="c1">// SVal of it + 1 subexpression: Loc kind (designates an RValue)</span>
+</pre></div>
+</div>
+<p>Example of a container which has iterators as elements.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">using</span> <span class="n">it_t</span> <span class="o">=</span> <span class="kt">int</span><span class="o">*</span><span class="p">;</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">it_t</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">;</span>
+<span class="n">vector_it</span> <span class="n">it</span> <span class="o">=</span> <span class="n">v</span><span class="p">.</span><span class="n">begin</span><span class="p">();</span> <span class="c1">// container modeling detects v as container</span>
+<span class="n">it</span> <span class="o">=</span> <span class="n">it</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This is the main issue right now, using these two maps in a more organized fashion, or providing a
+straightforward way to manage the symbolic values of iterators is essential to effectively progress with the
+implementation. Also the case of nested iterator modeling (where there is a container which has iterator
+as elements) the iterators that iterate a container and the iterators contained in the said container must be
+distinguished).
+The question is what to track in the GDM, and how to identify the correct iterator value.</p>
+<p>3 options have been outlined so far.</p>
+<p>Option 1: use only RValues (<code class="docutils literal notranslate"><span class="pre">SymbolRef</span></code>-s) as keys
+Class instance iterators (possibly with <code class="docutils literal notranslate"><span class="pre">LazyCompoundVal</span></code>) can not be used as keys as they are now, because
+they do not satisfy map key criteria (this could be maybe solved by defining an ordering on them), but the
+main issue is that even though they wrap a SymbolVal, this wrapping is an implementation detail and should not
+be relied upon, also meaning they should not be unwrapped.
+Pointer iterators do not have an issue with this option.</p>
+<p>Option 2: use only LValues (<code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">MemRegion*</span></code>) as keys
+Class instance iterators that evaluate as a result of multiple subexpressions have RValues and these immediate
+RValues break a cheain of value propagation. lazyCompoundVal should not be used as keys in a map (every
+operation results in a temporary which can be tracked).
+Pointer iterators that evaluate as a result of multiple subexpressions have RValues and these immediate RValues break
+the chain of value propagation. lazyCompoundVal should not be used as keys in a map (every operation results in a
+temporary which can be tracked). no temporaries are created during the evaluation of expressions (i + 1 + 2) there
+is no intermediate lvalue for i + 1.</p>
+<p>Option  3: In case of pointer iterators a solution could be to only track the RValues, and in the case of class
+instance iterators use both RValues and LValues, and this way we track the explicit nature of being pointer based
+or being class instance based.
+The drawback of this approach is that the implementation for modeling the 2 families of iterators are harder to
+share, which either leads to duplication or an extra layer of abstraction.
+The ability of LazyCompoundVal to take the role of the key inside the map (ordering or hashing) should still be
+solved in this case (as in Option 1).</p>
+</div>
+</div>
+</div>
+</div>
+
+
+      </div>
+      <div class="bottomnav" role="navigation" aria-label="bottom navigation">
+      
+        <p>
+        «&#160;&#160;<a href="RegionStore.html"><span class="section-number">3.5. </span>Region Store</a>
+        &#160;&#160;::&#160;&#160;
+        <a class="uplink" href="../../index.html">Contents</a>
+        &#160;&#160;::&#160;&#160;
+        <a href="../../ThreadSafetyAnalysis.html">Thread Safety Analysis</a>&#160;&#160;»
+        </p>
+
+      </div>
+
+    <div class="footer" role="contentinfo">
+        &#169; Copyright 2007-2020, The Clang Team.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 3.2.1.
+    </div>
+  </body>
+</html>
